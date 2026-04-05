@@ -1,6 +1,7 @@
 config.json
 digitalocean-dynamic-ip
 digitalocean-dynamic-dns-ip
+digitalocean-dynamic-dns-ip.exe
 digitalocean-dynamic-ip.json
 
 # GoLand IDE

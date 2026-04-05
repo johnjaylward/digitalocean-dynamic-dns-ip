@@ -12,9 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/user"
 	"strconv"
-
-	homedir "github.com/mitchellh/go-homedir"
 )
 
 func checkError(err error) {
@@ -96,7 +95,7 @@ type DOResponse struct {
 	} `json:"links"`
 }
 
-//GetConfig : get configuration file ~/.digitalocean-dynamic-ip.json
+// GetConfig : get configuration file ~/.digitalocean-dynamic-ip.json
 func GetConfig() ClientConfig {
 	cmdHelp := flag.Bool("h", false, "Show the help message")
 	cmdHelp2 := flag.Bool("help", false, "Show the help message")
@@ -120,8 +119,16 @@ func GetConfig() ClientConfig {
 	configFile := ""
 	if len(flag.Args()) == 0 {
 		var err error
-		configFile, err = homedir.Dir()
+		// configFile, err = homedir.Dir()
+		usr, err := user.Current()
 		checkError(err)
+		homeDir := usr.HomeDir
+		if usr.HomeDir == "" {
+			logWarning("Unable to determine the current user's home directory. Defaulting to current working directory. Consider specifying the config file path as a command argument or setting the HOME environment variable.")
+			homeDir, err = os.Getwd()
+			checkError(err)
+		}
+		configFile = homeDir
 		configFile += "/.digitalocean-dynamic-ip.json"
 	} else {
 		configFile = flag.Args()[0]
@@ -154,7 +161,7 @@ func usage() {
 	))
 }
 
-//CheckLocalIPs : get current IP of server. checks both IPv4 and Ipv6 to support dual stack environments
+// CheckLocalIPs : get current IP of server. checks both IPv4 and Ipv6 to support dual stack environments
 func CheckLocalIPs() (ipv4, ipv6 net.IP) {
 	var ipv4String, ipv6String string
 	ipv4CheckURL := "https://api.ipify.org/?format=text"
@@ -210,7 +217,7 @@ func getURLBody(url string) (string, error) {
 	return string(body), nil
 }
 
-//GetDomainRecords : Get DNS records of current domain.
+// GetDomainRecords : Get DNS records of current domain.
 func GetDomainRecords(domain string) []DNSRecord {
 	ret := make([]DNSRecord, 0)
 	var page DOResponse
