@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -110,7 +110,7 @@ func GetConfig() ClientConfig {
 
 	if !((*cmdDbg) || (*cmdDbg2)) {
 		// if no debug option was selected, discard all debug output
-		log.SetOutput(ioutil.Discard)
+		log.SetOutput(io.Discard)
 	} else {
 		// default debug output to Stdout instead of Stderr
 		log.SetOutput(os.Stdout)
@@ -136,7 +136,7 @@ func GetConfig() ClientConfig {
 
 	log.Printf("Using Config file: %s", configFile)
 
-	getfile, err := ioutil.ReadFile(configFile)
+	getfile, err := os.ReadFile(configFile)
 	checkError(err)
 	var config ClientConfig
 	err = json.Unmarshal(getfile, &config)
@@ -212,7 +212,7 @@ func getURLBody(url string) (string, error) {
 	request, err := http.Get(url)
 	checkError(err)
 	defer request.Body.Close()
-	body, err := ioutil.ReadAll(request.Body)
+	body, err := io.ReadAll(request.Body)
 	checkError(err)
 	return string(body), nil
 }
@@ -248,7 +248,7 @@ func getPage(url string) DOResponse {
 	response, err := client.Do(request)
 	checkError(err)
 	defer response.Body.Close()
-	body, err := ioutil.ReadAll(response.Body)
+	body, err := io.ReadAll(response.Body)
 	checkError(err)
 	// log.Println(string(body))
 	var jsonDOResponse DOResponse
@@ -332,7 +332,7 @@ func UpdateRecords(domain Domain, ipv4, ipv6 net.IP) {
 				response, err := client.Do(request)
 				checkError(err)
 				defer response.Body.Close()
-				body, err := ioutil.ReadAll(response.Body)
+				body, err := io.ReadAll(response.Body)
 				checkError(err)
 				log.Printf("%s: DO update response for %s: %s", domain.Domain, doRecord.Name, string(body))
 				updated++
