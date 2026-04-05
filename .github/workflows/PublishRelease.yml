@@ -49,6 +49,7 @@ jobs:
       name: "Publish Release "
       with:
         allowUpdates: true
+        omitBodyDuringUpdate: true
         artifacts: "releases/*"
         token: ${{ secrets.GITHUB_TOKEN }}
     
