@@ -14,49 +14,52 @@ import (
 	"os"
 	"os/user"
 	"strconv"
+	"time"
 )
 
+const (
+	minTTL                = 30               // Minimum TTL allowed by DigitalOcean
+	defaultIPCheckTimeout = 15 * time.Second // Default timeout for IP check requests
+)
+
+var stdErrLogger = log.New(os.Stderr, "", 0) // Logger for errors and warnings to stderr
+
+// checkError checks if an error occurred and logs it to stderr before exiting the program
 func checkError(err error) {
 	if err != nil {
-		log.SetOutput(os.Stderr)
-		log.Fatal(err)
+		logErrorAndExit(err.Error())
 	}
 }
 
-// logError Logs an error message to Stderr and exits the program
-func logError(msg string) {
-	log.SetOutput(os.Stderr)
-	log.Fatal(msg)
+// logErrorAndExit logs an error message to stderr and exits the program
+func logErrorAndExit(msg string) {
+	stdErrLogger.Println(msg)
+	os.Exit(1)
 }
 
-// logWarning Logs a warning message to Stderr without exiting the program
+// logWarning logs a warning message to stderr without exiting the program
 func logWarning(msg string) {
-	old := log.Default().Writer()
-	log.SetOutput(os.Stderr)
-	log.Println(msg)
-	log.SetOutput(old)
+	stdErrLogger.Println(msg)
 }
 
-// logWarning Logs a warning message to Stderr without exiting the program
+// logWarningf logs a formatted warning message to stderr without exiting the program
 func logWarningf(format string, v ...interface{}) {
-	old := log.Default().Writer()
-	log.SetOutput(os.Stderr)
-	log.Printf(format, v...)
-	log.SetOutput(old)
+	stdErrLogger.Printf(format, v...)
 }
 
 var config ClientConfig
 
 // ClientConfig : configuration json
 type ClientConfig struct {
-	APIKey          string   `json:"apiKey"`
-	DOPageSize      int      `json:"doPageSize"`
-	UseIPv4         *bool    `json:"useIPv4"`
-	UseIPv6         *bool    `json:"useIPv6"`
-	IPv4CheckURL    string   `json:"ipv4CheckUrl"`
-	IPv6CheckURL    string   `json:"ipv6CheckUrl"`
-	AllowIPv4InIPv6 bool     `json:"allowIPv4InIPv6"`
-	Domains         []Domain `json:"domains"`
+	APIKey                 string   `json:"apiKey"`
+	DOPageSize             int      `json:"doPageSize"`
+	UseIPv4                *bool    `json:"useIPv4"`
+	UseIPv6                *bool    `json:"useIPv6"`
+	IPv4CheckURL           string   `json:"ipv4CheckUrl"`
+	IPv6CheckURL           string   `json:"ipv6CheckUrl"`
+	AllowIPv4InIPv6        bool     `json:"allowIPv4InIPv6"`
+	IPvCheckTimeoutSeconds int      `json:"ipvCheckTimeoutSeconds"`
+	Domains                []Domain `json:"domains"`
 }
 
 // Domain : domains to be changed
@@ -95,7 +98,7 @@ type DOResponse struct {
 	} `json:"links"`
 }
 
-// GetConfig : get configuration file ~/.digitalocean-dynamic-ip.json
+// GetConfig loads the configuration from the specified JSON file or default ~/.digitalocean-dynamic-ip.json
 func GetConfig() ClientConfig {
 	cmdHelp := flag.Bool("h", false, "Show the help message")
 	cmdHelp2 := flag.Bool("help", false, "Show the help message")
@@ -136,14 +139,15 @@ func GetConfig() ClientConfig {
 
 	log.Printf("Using Config file: %s", configFile)
 
-	getfile, err := os.ReadFile(configFile)
+	configData, err := os.ReadFile(configFile)
 	checkError(err)
 	var config ClientConfig
-	err = json.Unmarshal(getfile, &config)
+	err = json.Unmarshal(configData, &config)
 	checkError(err)
 	return config
 }
 
+// usage prints the help message for command-line usage
 func usage() {
 	os.Stdout.WriteString(fmt.Sprintf("To use this program you can specify the following command options:\n"+
 		"-h | -help\n\tShow this help message\n"+
@@ -208,8 +212,16 @@ func CheckLocalIPs() (ipv4, ipv6 net.IP) {
 	return ipv4, ipv6
 }
 
+// getURLBody fetches the body of the given URL as a string
 func getURLBody(url string) (string, error) {
-	request, err := http.Get(url)
+	var timeout time.Duration
+	if config.IPvCheckTimeoutSeconds > 0 {
+		timeout = time.Duration(config.IPvCheckTimeoutSeconds) * time.Second
+	} else {
+		timeout = defaultIPCheckTimeout
+	}
+	client := &http.Client{Timeout: timeout}
+	request, err := client.Get(url)
 	checkError(err)
 	defer request.Body.Close()
 	body, err := io.ReadAll(request.Body)
@@ -219,7 +231,7 @@ func getURLBody(url string) (string, error) {
 
 // GetDomainRecords : Get DNS records of current domain.
 func GetDomainRecords(domain string) []DNSRecord {
-	ret := make([]DNSRecord, 0)
+	records := make([]DNSRecord, 0)
 	var page DOResponse
 	pageParam := ""
 	// 20 is the default page size
@@ -233,14 +245,21 @@ func GetDomainRecords(domain string) []DNSRecord {
 	}
 	for url := "https://api.digitalocean.com/v2/domains/" + url.PathEscape(domain) + "/records" + pageParam; url != ""; url = page.Links.Pages.Next {
 		page = getPage(url)
-		ret = append(ret, page.DomainRecords...)
+		records = append(records, page.DomainRecords...)
 	}
-	return ret
+	return records
 }
 
+// getPage fetches a page of DNS records from DigitalOcean API
 func getPage(url string) DOResponse {
 	log.Println(url)
-	client := &http.Client{}
+	var timeout time.Duration
+	if config.IPvCheckTimeoutSeconds > 0 {
+		timeout = time.Duration(config.IPvCheckTimeoutSeconds) * time.Second
+	} else {
+		timeout = defaultIPCheckTimeout
+	}
+	client := &http.Client{Timeout: timeout}
 	request, err := http.NewRequest("GET", url, nil)
 	checkError(err)
 	request.Header.Add("Content-type", "Application/json")
@@ -310,14 +329,14 @@ func UpdateRecords(domain Domain, ipv4, ipv6 net.IP) {
 		for _, doRecord := range doRecords {
 			//log.Printf("%s: checking `%s` : `%s`", domain.Domain, doRecord.Type, doRecord.Name)
 			if doRecord.Name == toUpdateRecord.Name && doRecord.Type == toUpdateRecord.Type {
-				if doRecord.Data == currentIP && (toUpdateRecord.TTL < 30 || doRecord.TTL == toUpdateRecord.TTL) {
+				if doRecord.Data == currentIP && (toUpdateRecord.TTL < minTTL || doRecord.TTL == toUpdateRecord.TTL) {
 					log.Printf("%s: IP/TTL did not change %+v", domain.Domain, doRecord)
 					continue
 				}
 				log.Printf("%s: updating %+v", domain.Domain, doRecord)
 				// set the IP address
 				doRecord.Data = currentIP
-				if toUpdateRecord.TTL >= 30 && doRecord.TTL != toUpdateRecord.TTL {
+				if toUpdateRecord.TTL >= minTTL && doRecord.TTL != toUpdateRecord.TTL {
 					doRecord.TTL = toUpdateRecord.TTL
 				}
 				update, err := json.Marshal(doRecord)
@@ -373,20 +392,11 @@ func toIPv6String(ip net.IP) (currentIP string) {
 	return currentIP
 }
 
-// func areZero(bs []byte) bool {
-// 	for _, b := range bs {
-// 		if b != 0 {
-// 			return false
-// 		}
-// 	}
-// 	return true
-// }
-
 func main() {
 	config = GetConfig()
 	currentIPv4, currentIPv6 := CheckLocalIPs()
 	if currentIPv4 == nil && currentIPv6 == nil {
-		logError("Current IP addresses are not valid, or both are disabled in the config. Check your configuration and internet connection.")
+		logErrorAndExit("Current IP addresses are not valid, or both are disabled in the config. Check your configuration and internet connection.")
 	}
 
 	for _, domain := range config.Domains {

@@ -70,6 +70,8 @@ The `allowIPv4InIPv6` configuration option will allow adding an IPv4 address to 
 
 The `ipv4CheckUrl` and `ipv6CheckUrl` configuration settings are optional. If set, they must be URLs which respond to a GET request, with a plaintext response containing only your IP address. If unset, they default to `https://api.ipify.org/?format=text` and `https://api64.ipify.org/?format=text` respectively.
 
+The `ipvCheckTimeoutSeconds` configuration option is optional and controls the timeout (in seconds) for HTTP requests when checking your IP address. If unset or set to 0, the default timeout of 15 seconds will be used. This prevents the application from hanging indefinitely if the IP check service is unresponsive.
+
 ```bash
 # after running `go build digitalocean-dynamic-ip.go`, run:
 ./digitalocean-dynamic-ip
