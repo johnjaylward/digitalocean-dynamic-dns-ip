@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -135,6 +139,278 @@ func TestHTTPTimeout(t *testing.T) {
 				t.Errorf("getHTTPTimeout() = %v, want %v", result, tt.expected)
 			}
 		})
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func TestGetConfigFromFile(t *testing.T) {
+	configJSON := `{
+		"apiKey": "testkey",
+		"doPageSize": 40,
+		"useIPv4": true,
+		"useIPv6": false,
+		"ipv4CheckUrl": "https://example.com/ipv4",
+		"ipv6CheckUrl": "https://example.com/ipv6",
+		"allowIPv4InIPv6": false,
+		"domains": []
+	}`
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
+		t.Fatalf("unable to write config file: %v", err)
+	}
+
+	oldArgs := os.Args
+	oldFlags := flag.CommandLine
+	defer func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldFlags
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"test", configPath}
+
+	cfg := GetConfig()
+	if cfg.APIKey != "testkey" {
+		t.Fatalf("GetConfig() APIKey = %s, want testkey", cfg.APIKey)
+	}
+	if cfg.DOPageSize != 40 {
+		t.Fatalf("GetConfig() DOPageSize = %d, want 40", cfg.DOPageSize)
+	}
+}
+
+func TestUsageOutput(t *testing.T) {
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("unable to create pipe: %v", err)
+	}
+	os.Stdout = w
+	usage()
+	w.Close()
+	os.Stdout = oldStdout
+
+	output, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("unable to read usage output: %v", err)
+	}
+	if !strings.Contains(string(output), "-h | -help") {
+		t.Fatalf("usage output missing expected text: %s", output)
+	}
+}
+
+func TestMainSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("203.0.113.5"))
+	}))
+	defer server.Close()
+
+	configJSON := `{
+		"apiKey": "testkey",
+		"doPageSize": 20,
+		"useIPv4": true,
+		"useIPv6": false,
+		"ipv4CheckUrl": "` + server.URL + `",
+		"allowIPv4InIPv6": false,
+		"domains": []
+	}`
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
+		t.Fatalf("unable to write config file: %v", err)
+	}
+
+	oldArgs := os.Args
+	oldFlags := flag.CommandLine
+	oldConfig := config
+	oldExit := exitFunc
+	defer func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldFlags
+		config = oldConfig
+		exitFunc = oldExit
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"test", configPath}
+	exitFunc = func(code int) {
+		t.Fatalf("main exited with code %d", code)
+	}
+
+	main()
+}
+
+func TestMainFailureWhenNoIPAddressesFound(t *testing.T) {
+	configJSON := `{
+		"apiKey": "testkey",
+		"doPageSize": 20,
+		"useIPv4": false,
+		"useIPv6": false,
+		"domains": []
+	}`
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
+		t.Fatalf("unable to write config file: %v", err)
+	}
+
+	oldArgs := os.Args
+	oldFlags := flag.CommandLine
+	oldExit := exitFunc
+	defer func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldFlags
+		exitFunc = oldExit
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"test", configPath}
+
+	exited := false
+	exitFunc = func(code int) {
+		exited = true
+		if code != 1 {
+			t.Fatalf("expected exit code 1, got %d", code)
+		}
+	}
+
+	main()
+
+	if !exited {
+		t.Fatal("expected main to exit with code 1")
+	}
+}
+
+func TestCheckLocalIPsIPv4Only(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("192.0.2.1"))
+	}))
+	defer server.Close()
+
+	oldConfig := config
+	config = ClientConfig{
+		UseIPv4:                boolPtr(true),
+		UseIPv6:                boolPtr(false),
+		IPv4CheckURL:           server.URL,
+		IPv6CheckURL:           "https://invalid.example",
+		IPvCheckTimeoutSeconds: 5,
+	}
+	defer func() { config = oldConfig }()
+
+	ipv4, ipv6 := CheckLocalIPs()
+	if ipv4 == nil || ipv4.String() != "192.0.2.1" {
+		t.Fatalf("CheckLocalIPs() ipv4 = %v, want 192.0.2.1", ipv4)
+	}
+	if ipv6 != nil {
+		t.Fatalf("CheckLocalIPs() ipv6 = %v, want nil", ipv6)
+	}
+}
+
+func TestGetDomainRecordsPagination(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/domains/test/records" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+
+		if r.URL.RawQuery == "per_page=2" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(fmt.Sprintf(`{
+				"domain_records": [
+					{"id": 1, "type": "A", "name": "www", "data": "1.1.1.1", "ttl": 3600, "priority": null, "port": null, "weight": null, "flags": null, "tag": null}
+				],
+				"meta": {"total": 2},
+				"links": {"pages": {"next": "%s/domains/test/records?page=2", "prev": "", "first": "", "last": ""}}
+			}`, server.URL)))
+			return
+		}
+
+		if r.URL.RawQuery == "page=2" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"domain_records": [
+					{"id": 2, "type": "A", "name": "api", "data": "1.1.1.2", "ttl": 3600, "priority": null, "port": null, "weight": null, "flags": null, "tag": null}
+				],
+				"meta": {"total": 2},
+				"links": {"pages": {"next": "", "prev": "", "first": "", "last": ""}}
+			}`))
+			return
+		}
+
+		t.Fatalf("unexpected query %s", r.URL.RawQuery)
+	}))
+	defer server.Close()
+
+	oldBase := digitalOceanAPIBase
+	oldConfig := config
+	digitalOceanAPIBase = server.URL
+	config = ClientConfig{DOPageSize: 2, IPvCheckTimeoutSeconds: 5}
+	defer func() {
+		digitalOceanAPIBase = oldBase
+		config = oldConfig
+	}()
+
+	records := GetDomainRecords("test")
+	if len(records) != 2 {
+		t.Fatalf("GetDomainRecords() returned %d records, want 2", len(records))
+	}
+	if records[0].Name != "www" || records[1].Name != "api" {
+		t.Fatalf("unexpected records %+v", records)
+	}
+}
+
+func TestUpdateRecordsPutsRecord(t *testing.T) {
+	var updateBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/domains/test/records":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"domain_records": [
+					{"id": 1, "type": "A", "name": "www", "data": "1.1.1.1", "ttl": 3600, "priority": null, "port": null, "weight": null, "flags": null, "tag": null}
+				],
+				"meta": {"total": 1},
+				"links": {"pages": {"next": "", "prev": "", "first": "", "last": ""}}
+			}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/domains/test/records/1":
+			var err error
+			updateBody, err = io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("unable to read request body: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"domain_record": {"id": 1}}`))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := digitalOceanAPIBase
+	oldConfig := config
+	digitalOceanAPIBase = server.URL
+	config = ClientConfig{APIKey: "test-key", IPvCheckTimeoutSeconds: 5}
+	defer func() {
+		digitalOceanAPIBase = oldBase
+		config = oldConfig
+	}()
+
+	UpdateRecords(Domain{
+		Domain:  "test",
+		Records: []DNSRecord{{Type: "A", Name: "www", TTL: 300}},
+	}, net.ParseIP("1.2.3.4"), nil)
+
+	if updateBody == nil {
+		t.Fatal("expected update request body")
+	}
+	if !strings.Contains(string(updateBody), `"data":"1.2.3.4"`) {
+		t.Fatalf("unexpected update body %s", updateBody)
+	}
+	if !strings.Contains(string(updateBody), `"ttl":300`) {
+		t.Fatalf("unexpected update body %s", updateBody)
 	}
 }
 

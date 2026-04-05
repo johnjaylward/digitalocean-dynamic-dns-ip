@@ -23,6 +23,9 @@ const (
 )
 
 var stdErrLogger = log.New(os.Stderr, "", 0) // Logger for errors and warnings to stderr
+// vars pulled out so they can be overriden in tests
+var digitalOceanAPIBase = "https://api.digitalocean.com/v2"
+var exitFunc = os.Exit
 
 // checkError checks if an error occurred and logs it to stderr before exiting the program
 func checkError(err error) {
@@ -34,7 +37,7 @@ func checkError(err error) {
 // logErrorAndExit logs an error message to stderr and exits the program
 func logErrorAndExit(msg string) {
 	stdErrLogger.Println(msg)
-	os.Exit(1)
+	exitFunc(1)
 }
 
 // logWarning logs a warning message to stderr without exiting the program
@@ -247,7 +250,7 @@ func GetDomainRecords(domain string) []DNSRecord {
 		}
 		pageParam = "?per_page=" + strconv.Itoa(pageSize)
 	}
-	for url := "https://api.digitalocean.com/v2/domains/" + url.PathEscape(domain) + "/records" + pageParam; url != ""; url = page.Links.Pages.Next {
+	for url := digitalOceanAPIBase + "/domains/" + url.PathEscape(domain) + "/records" + pageParam; url != ""; url = page.Links.Pages.Next {
 		page = getPage(url)
 		records = append(records, page.DomainRecords...)
 	}
@@ -353,7 +356,7 @@ func UpdateRecords(domain Domain, ipv4, ipv6 net.IP) {
 				checkError(err)
 				client := &http.Client{}
 				request, err := http.NewRequest("PUT",
-					"https://api.digitalocean.com/v2/domains/"+url.PathEscape(domain.Domain)+"/records/"+strconv.FormatInt(int64(doRecord.ID), 10),
+					digitalOceanAPIBase+"/domains/"+url.PathEscape(domain.Domain)+"/records/"+strconv.FormatInt(int64(doRecord.ID), 10),
 					bytes.NewBuffer(update))
 				checkError(err)
 				request.Header.Set("Content-Type", "application/json")
@@ -402,16 +405,23 @@ func toIPv6String(ip net.IP) (currentIP string) {
 	return currentIP
 }
 
-func main() {
+func run() error {
 	config = GetConfig()
 	currentIPv4, currentIPv6 := CheckLocalIPs()
 	if currentIPv4 == nil && currentIPv6 == nil {
-		logErrorAndExit("Current IP addresses are not valid, or both are disabled in the config. Check your configuration and internet connection.")
+		return fmt.Errorf("Current IP addresses are not valid, or both are disabled in the config. Check your configuration and internet connection.")
 	}
 
 	for _, domain := range config.Domains {
 		log.Printf("%s: START", domain.Domain)
 		UpdateRecords(domain, currentIPv4, currentIPv6)
 		log.Printf("%s: END", domain.Domain)
+	}
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		logErrorAndExit(err.Error())
 	}
 }
