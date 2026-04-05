@@ -19,7 +19,7 @@ jobs:
     - name: Run tests with coverage
       run: |
         set -o pipefail
-        go test -coverprofile=coverage.out ./... 2>&1 | tee test-output.txt
+        go test -coverprofile=coverage ./... 2>&1 | tee test-output.txt
 
     - name: Upload test artifacts
       if: always()

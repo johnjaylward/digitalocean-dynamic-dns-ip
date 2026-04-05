@@ -1,16 +1,12 @@
 package config
 
 import (
-	"flag"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/anaganisk/digitalocean-dynamic-dns-ip/constants"
-	"github.com/anaganisk/digitalocean-dynamic-dns-ip/logger"
 )
 
 func TestGetConfigFromFile(t *testing.T) {
@@ -30,15 +26,7 @@ func TestGetConfigFromFile(t *testing.T) {
 		t.Fatalf("unable to write config file: %v", err)
 	}
 
-	oldArgs := os.Args
-	oldFlags := flag.CommandLine
-	defer func() {
-		os.Args = oldArgs
-		flag.CommandLine = oldFlags
-	}()
-
-	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-	os.Args = []string{"test", configPath}
+	SetConfigFilePath(configPath)
 
 	cfg := Get()
 	if cfg.APIKey != "testkey" {
@@ -293,108 +281,6 @@ func TestDNSRecordTTLValidation(t *testing.T) {
 				t.Errorf("IsValidTTL() = %v, want %v", result, tt.isValid)
 			}
 		})
-	}
-}
-
-// TestDebugOutputWithFlag validates that debug output is sent to stdout when -d flag is set
-func TestDebugOutputWithFlag(t *testing.T) {
-	configJSON := `{
-		"apiKey": "testkey",
-		"doPageSize": 20,
-		"useIPv4": true,
-		"useIPv6": false,
-		"domains": []
-	}`
-
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
-		t.Fatalf("unable to write config file: %v", err)
-	}
-
-	oldArgs := os.Args
-	oldFlags := flag.CommandLine
-	oldStdout := os.Stdout
-	defer func() {
-		os.Args = oldArgs
-		flag.CommandLine = oldFlags
-		os.Stdout = oldStdout
-		// Reset logger after test
-		logger.SetDebugOutput(os.Stdout)
-	}()
-
-	// Capture stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("unable to create pipe: %v", err)
-	}
-	os.Stdout = w
-
-	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-	os.Args = []string{"test", "-d", configPath}
-
-	Get()
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	output, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("unable to read output: %v", err)
-	}
-
-	if !strings.Contains(string(output), "Using Config file:") {
-		t.Errorf("debug output missing 'Using Config file:' message when -d flag is set. Got: %s", output)
-	}
-}
-
-// TestDebugOutputWithoutFlag validates that debug output is discarded when -d flag is not set
-func TestDebugOutputWithoutFlag(t *testing.T) {
-	configJSON := `{
-		"apiKey": "testkey",
-		"doPageSize": 20,
-		"useIPv4": true,
-		"useIPv6": false,
-		"domains": []
-	}`
-
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
-		t.Fatalf("unable to write config file: %v", err)
-	}
-
-	oldArgs := os.Args
-	oldFlags := flag.CommandLine
-	oldStdout := os.Stdout
-	defer func() {
-		os.Args = oldArgs
-		flag.CommandLine = oldFlags
-		os.Stdout = oldStdout
-		// Reset logger after test
-		logger.SetDebugOutput(os.Stdout)
-	}()
-
-	// Capture stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("unable to create pipe: %v", err)
-	}
-	os.Stdout = w
-
-	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-	os.Args = []string{"test", configPath}
-
-	Get()
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	output, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("unable to read output: %v", err)
-	}
-
-	if strings.Contains(string(output), "Using Config file:") {
-		t.Errorf("debug output should be suppressed when -d flag is not set. Got: %s", output)
 	}
 }
 

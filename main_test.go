@@ -115,3 +115,105 @@ func TestUsageOutput(t *testing.T) {
 		t.Fatalf("usage output missing expected text: %s", output)
 	}
 }
+
+// TestMainDebugOutputWithFlag validates that debug output is sent to stdout when -d flag is set
+func TestMainDebugOutputWithFlag(t *testing.T) {
+	configJSON := `{
+		"apiKey": "testkey",
+		"doPageSize": 20,
+		"useIPv4": true,
+		"useIPv6": false,
+		"domains": []
+	}`
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
+		t.Fatalf("unable to write config file: %v", err)
+	}
+
+	oldArgs := os.Args
+	oldFlags := flag.CommandLine
+	oldStdout := os.Stdout
+	defer func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldFlags
+		os.Stdout = oldStdout
+		// Reset logger after test
+		logger.SetDebugOutput(os.Stdout)
+	}()
+
+	// Capture stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("unable to create pipe: %v", err)
+	}
+	os.Stdout = w
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"test", "-d", configPath}
+
+	run()
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	output, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("unable to read output: %v", err)
+	}
+
+	if !strings.Contains(string(output), "Using config file:") {
+		t.Errorf("debug output missing 'Using config file:' message when -d flag is set. Got: %s", output)
+	}
+}
+
+// TestMainDebugOutputWithoutFlag validates that debug output is discarded when -d flag is not set
+func TestMainDebugOutputWithoutFlag(t *testing.T) {
+	configJSON := `{
+		"apiKey": "testkey",
+		"doPageSize": 20,
+		"useIPv4": true,
+		"useIPv6": false,
+		"domains": []
+	}`
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
+		t.Fatalf("unable to write config file: %v", err)
+	}
+
+	oldArgs := os.Args
+	oldFlags := flag.CommandLine
+	oldStdout := os.Stdout
+	defer func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldFlags
+		os.Stdout = oldStdout
+		// Reset logger after test
+		logger.SetDebugOutput(os.Stdout)
+	}()
+
+	// Capture stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("unable to create pipe: %v", err)
+	}
+	os.Stdout = w
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"test", configPath}
+
+	run()
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	output, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("unable to read output: %v", err)
+	}
+
+	if strings.Contains(string(output), "Using Config file:") {
+		t.Errorf("debug output should be suppressed when -d flag is not set. Got: %s", output)
+	}
+}
