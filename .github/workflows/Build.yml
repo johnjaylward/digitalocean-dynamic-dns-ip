@@ -19,7 +19,7 @@ jobs:
       run: |
         #see https://en.wikipedia.org/wiki/Raspberry_Pi#Specifications for RPi arm versions
         #see https://github.com/golang/go/wiki/GoArm
-        platforms=("windows/amd64" "windows/386" "darwin/amd64" "linux/386" "linux/amd64" "linux/arm/6" "linux/arm/7" "linux/arm64/8" "freebsd/386" "freebsd/amd64")
+        platforms=("windows/amd64" "windows/386" "windows/arm64" "darwin/amd64" "darwin/arm64" "linux/386" "linux/amd64" "linux/arm/6" "linux/arm/7" "linux/arm64/8" "freebsd/386" "freebsd/amd64")
         mkdir -p releases
         for platform in "${platforms[@]}"
         do
