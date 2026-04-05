@@ -212,15 +212,17 @@ func CheckLocalIPs() (ipv4, ipv6 net.IP) {
 	return ipv4, ipv6
 }
 
+// getHTTPTimeout returns the configured HTTP timeout or the default if not configured
+func getHTTPTimeout() time.Duration {
+	if config.IPvCheckTimeoutSeconds > 0 {
+		return time.Duration(config.IPvCheckTimeoutSeconds) * time.Second
+	}
+	return defaultIPCheckTimeout
+}
+
 // getURLBody fetches the body of the given URL as a string
 func getURLBody(url string) (string, error) {
-	var timeout time.Duration
-	if config.IPvCheckTimeoutSeconds > 0 {
-		timeout = time.Duration(config.IPvCheckTimeoutSeconds) * time.Second
-	} else {
-		timeout = defaultIPCheckTimeout
-	}
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{Timeout: getHTTPTimeout()}
 	request, err := client.Get(url)
 	checkError(err)
 	defer request.Body.Close()
@@ -230,6 +232,8 @@ func getURLBody(url string) (string, error) {
 }
 
 // GetDomainRecords : Get DNS records of current domain.
+// Uses the DigitalOcean Domains API list records endpoint:
+// https://docs.digitalocean.com/reference/api/reference/domain-records/#domains_list_records
 func GetDomainRecords(domain string) []DNSRecord {
 	records := make([]DNSRecord, 0)
 	var page DOResponse
@@ -253,13 +257,7 @@ func GetDomainRecords(domain string) []DNSRecord {
 // getPage fetches a page of DNS records from DigitalOcean API
 func getPage(url string) DOResponse {
 	log.Println(url)
-	var timeout time.Duration
-	if config.IPvCheckTimeoutSeconds > 0 {
-		timeout = time.Duration(config.IPvCheckTimeoutSeconds) * time.Second
-	} else {
-		timeout = defaultIPCheckTimeout
-	}
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{Timeout: getHTTPTimeout()}
 	request, err := http.NewRequest("GET", url, nil)
 	checkError(err)
 	request.Header.Add("Content-type", "Application/json")
@@ -276,7 +274,19 @@ func getPage(url string) DOResponse {
 	return jsonDOResponse
 }
 
-// UpdateRecords : Update DNS records of domain
+// isValidRecordType checks if a DNS record type is supported (A or AAAA)
+func isValidRecordType(recordType string) bool {
+	return recordType == "A" || recordType == "AAAA"
+}
+
+// isValidTTL checks if a TTL value meets the minimum requirement
+func isValidTTL(ttl int) bool {
+	return ttl >= minTTL
+}
+
+// UpdateRecords : Update DNS records of domain.
+// Uses the DigitalOcean Domains API update record endpoint:
+// https://docs.digitalocean.com/reference/api/reference/domain-records/#domains_update_record
 func UpdateRecords(domain Domain, ipv4, ipv6 net.IP) {
 	log.Printf("%s: %d to update", domain.Domain, len(domain.Records))
 	updated := 0
@@ -288,7 +298,7 @@ func UpdateRecords(domain Domain, ipv4, ipv6 net.IP) {
 	}
 	log.Printf("%s: %d DNS records found in DigitalOcean", domain.Domain, len(doRecords))
 	for _, toUpdateRecord := range domain.Records {
-		if toUpdateRecord.Type != "A" && toUpdateRecord.Type != "AAAA" {
+		if !isValidRecordType(toUpdateRecord.Type) {
 			logWarningf("%s: Unsupported type (Only A and AAAA records supported) for updates %+v", domain.Domain, toUpdateRecord)
 			continue
 		}
@@ -336,7 +346,7 @@ func UpdateRecords(domain Domain, ipv4, ipv6 net.IP) {
 				log.Printf("%s: updating %+v", domain.Domain, doRecord)
 				// set the IP address
 				doRecord.Data = currentIP
-				if toUpdateRecord.TTL >= minTTL && doRecord.TTL != toUpdateRecord.TTL {
+				if isValidTTL(toUpdateRecord.TTL) && doRecord.TTL != toUpdateRecord.TTL {
 					doRecord.TTL = toUpdateRecord.TTL
 				}
 				update, err := json.Marshal(doRecord)
