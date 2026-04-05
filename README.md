@@ -20,8 +20,6 @@ or Build from source
 # Requires Git, Go 1.8+(GO 1.11 if you want to use GO111MODULE=on).
 # clone the repo in ~/go/src/github.com/anaganisk:
 git clone https://github.com/anaganisk/digitalocean-dynamic-dns-ip.git
-# Skip to next step, if you have GO111MODULE=on in your environment it is fetched automatically
-go get github.com/mitchellh/go-homedir
 # build the project
 go build
 ```
