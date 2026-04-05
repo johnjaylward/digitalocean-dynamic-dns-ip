@@ -316,19 +316,21 @@ func TestGetDomainRecordsPagination(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 
-		if r.URL.RawQuery == "per_page=2" {
+		query := r.URL.RawQuery
+
+		if query == "per_page=2&type=A" {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(fmt.Sprintf(`{
 				"domain_records": [
 					{"id": 1, "type": "A", "name": "www", "data": "1.1.1.1", "ttl": 3600, "priority": null, "port": null, "weight": null, "flags": null, "tag": null}
 				],
 				"meta": {"total": 2},
-				"links": {"pages": {"next": "%s/domains/test/records?page=2", "prev": "", "first": "", "last": ""}}
+				"links": {"pages": {"next": "%s/domains/test/records?page=2&type=A", "prev": "", "first": "", "last": ""}}
 			}`, server.URL)))
 			return
 		}
 
-		if r.URL.RawQuery == "page=2" {
+		if query == "page=2&type=A" {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{
 				"domain_records": [
@@ -340,7 +342,7 @@ func TestGetDomainRecordsPagination(t *testing.T) {
 			return
 		}
 
-		t.Fatalf("unexpected query %s", r.URL.RawQuery)
+		t.Fatalf("unexpected query %s", query)
 	}))
 	defer server.Close()
 
@@ -353,7 +355,13 @@ func TestGetDomainRecordsPagination(t *testing.T) {
 		config = oldConfig
 	}()
 
-	records := GetDomainRecords("test")
+	records := GetDomainRecords(Domain{
+		Domain: "test",
+		Records: []DNSRecord{
+			{Type: "A", Name: "www"},
+			{Type: "A", Name: "api"},
+		},
+	})
 	if len(records) != 2 {
 		t.Fatalf("GetDomainRecords() returned %d records, want 2", len(records))
 	}
@@ -441,79 +449,248 @@ func TestGetURLBodyWithMock(t *testing.T) {
 	}
 }
 
-// TestDNSRecordValidation tests the isValidRecordType function
-func TestDNSRecordValidation(t *testing.T) {
+// TestDNSRecordTypeValidation tests the IsValidType receiver method
+func TestDNSRecordTypeValidation(t *testing.T) {
 	tests := []struct {
-		name       string
-		recordType string
-		isValid    bool
+		name    string
+		record  DNSRecord
+		isValid bool
 	}{
 		{
-			name:       "A record",
-			recordType: "A",
-			isValid:    true,
+			name:    "A record",
+			record:  DNSRecord{Type: "A"},
+			isValid: true,
 		},
 		{
-			name:       "AAAA record",
-			recordType: "AAAA",
-			isValid:    true,
+			name:    "AAAA record",
+			record:  DNSRecord{Type: "AAAA"},
+			isValid: true,
 		},
 		{
-			name:       "MX record (unsupported)",
-			recordType: "MX",
-			isValid:    false,
+			name:    "MX record (unsupported)",
+			record:  DNSRecord{Type: "MX"},
+			isValid: false,
 		},
 		{
-			name:       "CNAME record (unsupported)",
-			recordType: "CNAME",
-			isValid:    false,
+			name:    "CNAME record (unsupported)",
+			record:  DNSRecord{Type: "CNAME"},
+			isValid: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isValidRecordType(tt.recordType)
+			result := tt.record.IsValidType()
 			if result != tt.isValid {
-				t.Errorf("isValidRecordType(%s) = %v, want %v", tt.recordType, result, tt.isValid)
+				t.Errorf("IsValidType() = %v, want %v", result, tt.isValid)
 			}
 		})
 	}
 }
 
-// TestConfigTTLValidation tests the isValidTTL function
-func TestConfigTTLValidation(t *testing.T) {
+// TestDNSRecordTTLValidation tests the IsValidTTL receiver method
+func TestDNSRecordTTLValidation(t *testing.T) {
 	tests := []struct {
 		name    string
-		ttl     int
+		record  DNSRecord
 		isValid bool
 	}{
 		{
 			name:    "minimum TTL",
-			ttl:     30,
+			record:  DNSRecord{TTL: 30},
 			isValid: true,
 		},
 		{
 			name:    "TTL below minimum",
-			ttl:     15,
+			record:  DNSRecord{TTL: 15},
 			isValid: false,
 		},
 		{
 			name:    "typical TTL",
-			ttl:     3600,
+			record:  DNSRecord{TTL: 3600},
 			isValid: true,
 		},
 		{
 			name:    "high TTL",
-			ttl:     86400,
+			record:  DNSRecord{TTL: 86400},
 			isValid: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isValidTTL(tt.ttl)
+			result := tt.record.IsValidTTL()
 			if result != tt.isValid {
-				t.Errorf("isValidTTL(%d) = %v, want %v", tt.ttl, result, tt.isValid)
+				t.Errorf("IsValidTTL() = %v, want %v", result, tt.isValid)
+			}
+		})
+	}
+}
+
+// TestClientConfigPageSizeBounding tests the BoundedPageSize receiver method
+func TestClientConfigPageSizeBounding(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   ClientConfig
+		expected int
+	}{
+		{
+			name:     "default page size",
+			config:   ClientConfig{DOPageSize: 0},
+			expected: defaultPageSize,
+		},
+		{
+			name:     "custom valid page size",
+			config:   ClientConfig{DOPageSize: 50},
+			expected: 50,
+		},
+		{
+			name:     "page size exceeds max",
+			config:   ClientConfig{DOPageSize: 300},
+			expected: maxPageSize,
+		},
+		{
+			name:     "page size equals default",
+			config:   ClientConfig{DOPageSize: defaultPageSize},
+			expected: defaultPageSize,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.config.BoundedPageSize()
+			if result != tt.expected {
+				t.Errorf("BoundedPageSize() = %d, want %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestDomainHasUniformRecordType tests the HasUniformRecordType receiver method
+func TestDomainHasUniformRecordType(t *testing.T) {
+	tests := []struct {
+		name     string
+		domain   Domain
+		expected bool
+	}{
+		{
+			name:     "empty domain",
+			domain:   Domain{Domain: "test", Records: []DNSRecord{}},
+			expected: false,
+		},
+		{
+			name: "single A record",
+			domain: Domain{
+				Domain:  "test",
+				Records: []DNSRecord{{Type: "A"}},
+			},
+			expected: true,
+		},
+		{
+			name: "multiple A records",
+			domain: Domain{
+				Domain: "test",
+				Records: []DNSRecord{
+					{Type: "A", Name: "www"},
+					{Type: "A", Name: "api"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "mixed A and AAAA records",
+			domain: Domain{
+				Domain: "test",
+				Records: []DNSRecord{
+					{Type: "A", Name: "www"},
+					{Type: "AAAA", Name: "www"},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "multiple AAAA records",
+			domain: Domain{
+				Domain: "test",
+				Records: []DNSRecord{
+					{Type: "AAAA", Name: "www"},
+					{Type: "AAAA", Name: "api"},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.domain.HasUniformRecordType()
+			if result != tt.expected {
+				t.Errorf("HasUniformRecordType() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestDomainUniformRecordType tests the UniformRecordType receiver method
+func TestDomainUniformRecordType(t *testing.T) {
+	tests := []struct {
+		name     string
+		domain   Domain
+		expected string
+	}{
+		{
+			name:     "empty domain",
+			domain:   Domain{Domain: "test", Records: []DNSRecord{}},
+			expected: "",
+		},
+		{
+			name: "single A record",
+			domain: Domain{
+				Domain:  "test",
+				Records: []DNSRecord{{Type: "A"}},
+			},
+			expected: "A",
+		},
+		{
+			name: "multiple A records",
+			domain: Domain{
+				Domain: "test",
+				Records: []DNSRecord{
+					{Type: "A", Name: "www"},
+					{Type: "A", Name: "api"},
+				},
+			},
+			expected: "A",
+		},
+		{
+			name: "mixed A and AAAA records",
+			domain: Domain{
+				Domain: "test",
+				Records: []DNSRecord{
+					{Type: "A", Name: "www"},
+					{Type: "AAAA", Name: "www"},
+				},
+			},
+			expected: "",
+		},
+		{
+			name: "multiple AAAA records",
+			domain: Domain{
+				Domain: "test",
+				Records: []DNSRecord{
+					{Type: "AAAA", Name: "www"},
+					{Type: "AAAA", Name: "api"},
+				},
+			},
+			expected: "AAAA",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.domain.UniformRecordType()
+			if result != tt.expected {
+				t.Errorf("UniformRecordType() = %s, want %s", result, tt.expected)
 			}
 		})
 	}

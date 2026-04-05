@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	minTTL                = 30               // Minimum TTL allowed by DigitalOcean
 	defaultIPCheckTimeout = 15 * time.Second // Default timeout for IP check requests
+	minTTL                = 30               // Minimum TTL allowed by DigitalOcean
+	defaultPageSize       = 20               // Default page size for DigitalOcean API
+	maxPageSize           = 200              // Maximum page size for DigitalOcean API
 )
 
 var stdErrLogger = log.New(os.Stderr, "", 0) // Logger for errors and warnings to stderr
@@ -237,20 +239,23 @@ func getURLBody(url string) (string, error) {
 // GetDomainRecords : Get DNS records of current domain.
 // Uses the DigitalOcean Domains API list records endpoint:
 // https://docs.digitalocean.com/reference/api/reference/domain-records/#domains_list_records
-func GetDomainRecords(domain string) []DNSRecord {
+func GetDomainRecords(domain Domain) []DNSRecord {
 	records := make([]DNSRecord, 0)
 	var page DOResponse
 	pageParam := ""
-	// 20 is the default page size
-	if config.DOPageSize > 0 && config.DOPageSize != 20 {
-		pageSize := config.DOPageSize
-		// don't let users set more than the max size
-		if pageSize > 200 {
-			pageSize = 200
-		}
+	// Use configured page size if available and different from default
+	if pageSize := config.BoundedPageSize(); pageSize != defaultPageSize {
 		pageParam = "?per_page=" + strconv.Itoa(pageSize)
 	}
-	for url := digitalOceanAPIBase + "/domains/" + url.PathEscape(domain) + "/records" + pageParam; url != ""; url = page.Links.Pages.Next {
+	// Check if all records have the same type and add type filter if so
+	if recordType := domain.UniformRecordType(); recordType != "" {
+		separator := "?"
+		if pageParam != "" {
+			separator = "&"
+		}
+		pageParam += separator + "type=" + url.QueryEscape(recordType)
+	}
+	for url := digitalOceanAPIBase + "/domains/" + url.PathEscape(domain.Domain) + "/records" + pageParam; url != ""; url = page.Links.Pages.Next {
 		page = getPage(url)
 		records = append(records, page.DomainRecords...)
 	}
@@ -277,14 +282,49 @@ func getPage(url string) DOResponse {
 	return jsonDOResponse
 }
 
-// isValidRecordType checks if a DNS record type is supported (A or AAAA)
-func isValidRecordType(recordType string) bool {
-	return recordType == "A" || recordType == "AAAA"
+// IsValidType checks if the DNS record type is supported (A or AAAA)
+func (r DNSRecord) IsValidType() bool {
+	return r.Type == "A" || r.Type == "AAAA"
 }
 
-// isValidTTL checks if a TTL value meets the minimum requirement
-func isValidTTL(ttl int) bool {
-	return ttl >= minTTL
+// IsValidTTL checks if the DNS record TTL value meets the minimum requirement
+func (r DNSRecord) IsValidTTL() bool {
+	return r.TTL >= minTTL
+}
+
+// BoundedPageSize returns the configured page size clamped to the valid bounds
+func (c ClientConfig) BoundedPageSize() int {
+	if c.DOPageSize > 0 && c.DOPageSize != defaultPageSize {
+		pageSize := c.DOPageSize
+		// don't let users set more than the max size
+		if pageSize > maxPageSize {
+			pageSize = maxPageSize
+		}
+		return pageSize
+	}
+	return defaultPageSize
+}
+
+// HasUniformRecordType checks if all records in the domain have the same DNS record type
+func (d Domain) HasUniformRecordType() bool {
+	if len(d.Records) == 0 {
+		return false
+	}
+	recordType := d.Records[0].Type
+	for _, record := range d.Records {
+		if record.Type != recordType {
+			return false
+		}
+	}
+	return true
+}
+
+// UniformRecordType returns the record type if all records have the same type, empty string otherwise
+func (d Domain) UniformRecordType() string {
+	if !d.HasUniformRecordType() {
+		return ""
+	}
+	return d.Records[0].Type
 }
 
 // UpdateRecords : Update DNS records of domain.
@@ -293,7 +333,7 @@ func isValidTTL(ttl int) bool {
 func UpdateRecords(domain Domain, ipv4, ipv6 net.IP) {
 	log.Printf("%s: %d to update", domain.Domain, len(domain.Records))
 	updated := 0
-	doRecords := GetDomainRecords(domain.Domain)
+	doRecords := GetDomainRecords(domain)
 	// look for the item to update
 	if len(doRecords) < 1 {
 		logWarningf("%s: No DNS records found in DigitalOcean", domain.Domain)
@@ -301,7 +341,7 @@ func UpdateRecords(domain Domain, ipv4, ipv6 net.IP) {
 	}
 	log.Printf("%s: %d DNS records found in DigitalOcean", domain.Domain, len(doRecords))
 	for _, toUpdateRecord := range domain.Records {
-		if !isValidRecordType(toUpdateRecord.Type) {
+		if !toUpdateRecord.IsValidType() {
 			logWarningf("%s: Unsupported type (Only A and AAAA records supported) for updates %+v", domain.Domain, toUpdateRecord)
 			continue
 		}
@@ -349,7 +389,7 @@ func UpdateRecords(domain Domain, ipv4, ipv6 net.IP) {
 				log.Printf("%s: updating %+v", domain.Domain, doRecord)
 				// set the IP address
 				doRecord.Data = currentIP
-				if isValidTTL(toUpdateRecord.TTL) && doRecord.TTL != toUpdateRecord.TTL {
+				if toUpdateRecord.IsValidTTL() && doRecord.TTL != toUpdateRecord.TTL {
 					doRecord.TTL = toUpdateRecord.TTL
 				}
 				update, err := json.Marshal(doRecord)
