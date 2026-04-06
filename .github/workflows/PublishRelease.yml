@@ -50,6 +50,8 @@ jobs:
       with:
         allowUpdates: true
         omitBodyDuringUpdate: true
+        omitDraftDuringUpdate: true
+        omitPrereleaseDuringUpdate: true
         artifacts: "releases/*"
         token: ${{ secrets.GITHUB_TOKEN }}
     
