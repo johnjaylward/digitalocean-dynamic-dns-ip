@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/anaganisk/digitalocean-dynamic-dns-ip/config"
 	"github.com/anaganisk/digitalocean-dynamic-dns-ip/constants"
@@ -24,22 +25,35 @@ func CheckPublicIPs() (ipv4, ipv6 net.IP) {
 		ipv6CheckURL = conf.IPv6CheckURL
 	}
 
+	var wg sync.WaitGroup
+
 	if conf.UseIPv4 == nil || *(conf.UseIPv4) {
-		var err error
-		ipv4, err = getIp("IPv4", ipv4CheckURL)
-		if err != nil {
-			logger.Warning(err.Error())
-		}
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			ip, err := getIp("IPv4", url)
+			if err != nil {
+				logger.Warning(err.Error())
+				return
+			}
+			ipv4 = ip
+		}(ipv4CheckURL)
 	}
 
 	if conf.UseIPv6 == nil || *(conf.UseIPv6) {
-		var err error
-		ipv6, err = getIp("IPv6", ipv6CheckURL)
-		if err != nil {
-			logger.Warning(err.Error())
-		}
-
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			ip, err := getIp("IPv6", url)
+			if err != nil {
+				logger.Warning(err.Error())
+				return
+			}
+			ipv6 = ip
+		}(ipv6CheckURL)
 	}
+	wg.Wait()
+
 	return ipv4, ipv6
 }
 
