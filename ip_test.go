@@ -31,7 +31,7 @@ func TestCheckLocalIPsIPv4Only(t *testing.T) {
 	})
 	defer func() { config.Set(oldConfig) }()
 
-	ipv4, ipv6 := CheckLocalIPs()
+	ipv4, ipv6 := CheckPublicIPs()
 	if ipv4 == nil || ipv4.String() != "192.0.2.1" {
 		t.Fatalf("CheckLocalIPs() ipv4 = %v, want 192.0.2.1", ipv4)
 	}

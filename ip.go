@@ -1,19 +1,21 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/anaganisk/digitalocean-dynamic-dns-ip/config"
+	"github.com/anaganisk/digitalocean-dynamic-dns-ip/constants"
 	"github.com/anaganisk/digitalocean-dynamic-dns-ip/logger"
 )
 
-// CheckLocalIPs : get current IP of server. checks both IPv4 and Ipv6 to support dual stack environments
-func CheckLocalIPs() (ipv4, ipv6 net.IP) {
-	var ipv4String, ipv6String string
-	ipv4CheckURL := "https://api.ipify.org/?format=text"
-	ipv6CheckURL := "https://api64.ipify.org/?format=text"
+// CheckPublicIPs : get current IP of server. checks both IPv4 and Ipv6 to support dual stack environments
+func CheckPublicIPs() (ipv4, ipv6 net.IP) {
+	ipv4CheckURL := constants.DefaultIPv4CheckURL
+	ipv6CheckURL := constants.DefaultIPv6CheckURL
 	conf := config.Get()
 	if len(conf.IPv4CheckURL) > 0 {
 		ipv4CheckURL = conf.IPv4CheckURL
@@ -23,38 +25,50 @@ func CheckLocalIPs() (ipv4, ipv6 net.IP) {
 	}
 
 	if conf.UseIPv4 == nil || *(conf.UseIPv4) {
-		logger.Debug("Checking IPv4 with URL: %s", ipv4CheckURL)
-		ipv4String, _ = getURLBody(ipv4CheckURL)
-		if ipv4String == "" {
-			logger.Warning("No IPv4 address found. Consider disabling IPv4 checks in the config `\"useIPv4\": false`")
-		} else {
-			ipv4 = net.ParseIP(ipv4String)
-			if ipv4 != nil {
-				// make sure we got back an actual ipv4 address
-				ipv4 = ipv4.To4()
-				logger.Debug("Discovered IPv4 address `%s`", ipv4.String())
-			}
-			if ipv4 == nil {
-				logger.Warningf("Unable to parse `%s` as an IPv4 address", ipv4String)
-			}
+		var err error
+		ipv4, err = getIp("IPv4", ipv4CheckURL)
+		if err != nil {
+			logger.Warning(err.Error())
 		}
 	}
 
 	if conf.UseIPv6 == nil || *(conf.UseIPv6) {
-		logger.Debug("Checking IPv6 with URL: %s", ipv6CheckURL)
-		ipv6String, _ = getURLBody(ipv6CheckURL)
-		if ipv6String == "" {
-			logger.Warning("No IPv6 address found. Consider disabling IPv6 checks in the config `\"useIPv6\": false`")
-		} else {
-			ipv6 = net.ParseIP(ipv6String)
-			if ipv6 == nil {
-				logger.Warningf("Unable to parse `%s` as an IPv6 address", ipv6String)
-			} else {
-				logger.Debug("Discovered IPv6 address `%s`", ipv6.String())
-			}
+		var err error
+		ipv6, err = getIp("IPv6", ipv6CheckURL)
+		if err != nil {
+			logger.Warning(err.Error())
 		}
+
 	}
 	return ipv4, ipv6
+}
+
+func getIp(ipType, url string) (net.IP, error) {
+	logger.Debug("Checking %s with URL: %s", ipType, url)
+
+	ipString, err := getURLBody(url)
+	if err != nil {
+		return nil, err
+	}
+
+	if ipString != "" {
+		ip := net.ParseIP(ipString)
+		if ip != nil {
+			if strings.ToLower(ipType) == "ipv4" {
+				ip = ip.To4() // ensure IPv4 when expected
+			}
+			logger.Debug("Discovered %s address `%s`", ipType, ip.String())
+		}
+		if ip == nil {
+			return nil, fmt.Errorf("unable to parse %q as a %s address", ipString, ipType)
+		}
+		return ip, nil
+	}
+
+	return nil, fmt.Errorf(
+		"No %s address found. Consider disabling %s checks in the config `\"use%s\": false`",
+		ipType, ipType, ipType,
+	)
 }
 
 // getURLBody fetches the body of the given URL as a string

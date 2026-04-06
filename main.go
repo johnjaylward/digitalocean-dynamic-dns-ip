@@ -55,7 +55,7 @@ func run() error {
 	config.SetConfigFilePath(configFile)
 
 	conf := config.Get()
-	currentIPv4, currentIPv6 := CheckLocalIPs()
+	currentIPv4, currentIPv6 := CheckPublicIPs()
 	if currentIPv4 == nil && currentIPv6 == nil {
 		return fmt.Errorf("Current IP addresses are not valid, or both are disabled in the config. Check your configuration and internet connection.")
 	}
